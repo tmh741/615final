@@ -1,0 +1,244 @@
+---
+title: "Shark Attacks - Perception, Sentiment, and Data"
+author: "Tim Hogan"
+date: "12/16/2019"
+output: ioslides_presentation
+---
+
+```{r setup, include=FALSE}
+library(leaflet)
+library(leaflet.extras)
+library(tidyverse)
+library(magrittr)
+library(readxl)
+library(tigris)
+library(downloader)
+library(stringr)
+library(tidytext)
+library(wordcloud)
+library(reshape2)
+library(gridExtra)
+library(rvest)
+
+#Read in data and subset rows and columns that aren't NA's. Remove cases that are missing.
+attack <- read_xls("GSAF5-2.xls")
+attack <- attack[1:6483,1:16]
+attack <- attack[-which(is.na(attack$`Case Number...1`)),]
+
+#Change year to number. Create new variables to quantify aspects.
+#Hurt is if there was actually an injury. GSAF is if it was reported by GSAF first.
+#common is if it's Provoked or Unprovoked. Confirmed is if shark characteristics had been recorded.
+attack$Year <- as.numeric(attack$Year)
+attack$Hurt <- ifelse(grepl("No injury",attack$Injury)==T,0,1)
+attack$GSAF <- ifelse(grepl("GSAF",attack$`Investigator or Source`)==T,1,0)
+attack$common <- ifelse(attack$Type=="Unprovoked"|attack$Type=="Provoked",1,0)
+attack$Confirmed <- ifelse(grepl("No shark",attack$Species)==T | is.na(attack$Species)==T|grepl("involvement",attack$Species)==T,0,1)
+attack$`Fatal (Y/N)`[is.na(attack$`Fatal (Y/N)`)] <- 0
+attack %<>% separate(Date,c("Day","Month","Yearr"),sep="-")
+
+#Set year boundary past 2010. Change everything else to factors for analysis.
+attack2010 <- subset(attack,Year>=2010 & Country=="USA")
+attack2010$Hurt <- as.factor(attack2010$Hurt)
+attack2010$common <- as.factor(attack2010$common)
+attack2010$Confirmed <- as.factor(attack2010$Confirmed)
+attack2010$Laceration <- ifelse(grepl("aceratio",attack2010$Injury)==T,1,0)
+
+# Pull in states for leaflet.
+states <- states(cb=T)
+
+source("TextFunctions.R")
+
+textdf <- readtext("https://www.trackingsharks.com/mans-inflatable-paddleboard-sunk-by-10ft-tiger-shark-shark-hits-kid/",
+                   "https://www.trackingsharks.com/great-white-bites-kayak-in-california-leaves-2-massive-teeth/",
+                   3,3); textdf$set <- "2019-Unharmed-TC"
+textdf1 <- readtext("https://www.trackingsharks.com/shark-bite-snorkelers-arm-down-to-bone/",
+                    "https://www.trackingsharks.com/shark-bites-surfer-near-cocoa-beach-pier/",
+                    3,3); textdf1$set <- "2019-Harmed-TC"
+textdf2 <- readtext("https://www.hawaiinewsnow.com/2019/06/15/teen-loses-leg-fingers-shark-attack/",
+                    "https://www.hawaiinewsnow.com/2019/08/20/shark-attack-reported-napoopoo-beach-park-off-hawaii-island/",
+                    1,2); textdf2$set <- "2019-Harmed-HNN"
+
+textdf3 <- readtext("https://www.hawaiinewsnow.com/story/20010243/shark-attack-survivor-recounts-frightening-ordeal/",
+                    "https://www.hawaiinewsnow.com/story/20230172/beaches-closed-after-man-by-shark-on-maui/",
+                    1,2); textdf3$set <- "2010-Harmed-HNN"
+```
+
+## Map of Shark Attacks
+
+```{r,echo=F}
+sumattack <- attack2010 %>% subset(common==1) %>% group_by(Area) %>% summarize(Attacks=n(),Provoked=sum(Type=="Provoked"),Uninjured=sum(Hurt==0), Fatal=sum(`Fatal (Y/N)`=="Y"))
+
+states_merged <- geo_join(states,sumattack,"NAME","Area")
+states_merged <- subset(states_merged, !is.na(Attacks))
+
+pal <- colorNumeric("Reds",domain=states_merged@data[,c("Attacks")])
+#states_merged$n[is.na(states_merged$n)] <- 0
+
+popup_attack <- paste0("Total: ", as.character(states_merged$n),
+                       "\n Provoked: ", as.character(states_merged$Provoked),
+                       "\n Uninjured: ", as.character(states_merged$Uninjured))
+
+leaflet() %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  setView(-108.483330,38.712046,zoom=3) %>%
+  addPolygons(data=states_merged,
+              fillColor=~pal(states_merged@data[,c("Attacks")]),
+              fillOpacity=0.7,
+              weight=0.2,
+              smoothFactor=0.2,
+              popup=~popup_attack) %>%
+  addLegend(pal=pal,
+            values=states_merged@data[,c("Attacks")],
+            position="bottomright",
+            title="Shark Attacks")
+
+```
+
+## How do people feel about sharks?
+
+- Big teeth
+- Sharp teeth
+- Jaws theme
+- Bad movies
+- Big teeth
+
+## However, they're important, and endangered.
+
+- Many are predators that control the food chain effectively.
+- As some become endangered, these ecosystems can fall out of balance.
+- This can cause degradation and a reduction in important species to us.
+- Conservationists have been working to preserve sharks, but have to work against this negative image.
+
+## Why the bad image?
+
+- Jaws is the mass-media start of sharks being scary ocean monsters.
+- Shows like Shark Week have romanticized shark attack stories.
+- Overall, sharks are mostly associated with shark attacks.
+
+## Questions
+
+- How frequent and bad are shark attacks?
+- Also, how do journalism articles cover shark attacks?
+- The Global Shark Attack File has records of shark attacks and links to sources.
+- This project will focus on the United States, between 2010 and 2019.
+
+## Number of Attacks
+
+```{r,echo=F}
+ggplot(attack2010) + geom_bar(aes(x=Year,fill=Type)) + xlab("") + ylab("Frequency")  + scale_x_continuous(breaks=seq(2010,2019,1))
+```
+
+- There are also some shark "interactions", not just "attacks".
+
+## Fatalities by State
+
+```{r,echo=F}
+pal1 <- colorNumeric("Reds",domain=states_merged@data[,c("Fatal")])
+#states_merged$n[is.na(states_merged$n)] <- 0
+
+popup_attack <- paste0("Total: ", as.character(states_merged$n),
+                       "\n Provoked: ", as.character(states_merged$Provoked),
+                       "\n Uninjured: ", as.character(states_merged$Uninjured))
+
+leaflet() %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  setView(-108.483330,38.712046,zoom=3) %>%
+  addPolygons(data=states_merged,
+              fillColor=~pal1(states_merged@data[,c("Fatal")]),
+              fillOpacity=0.7,
+              weight=0.2,
+              smoothFactor=0.2,
+              popup=~popup_attack) %>%
+  addLegend(pal=pal1,
+            values=states_merged@data[,c("Fatal")],
+            position="bottomright",
+            title="Fatalities")
+```
+
+## Map colored by injuries
+
+```{r,echo=F}
+pal2 <- colorNumeric("Reds",domain=states_merged@data[,c("Uninjured")])
+#states_merged$n[is.na(states_merged$n)] <- 0
+
+popup_attack <- paste0("Total: ", as.character(states_merged$n),
+                       "\n Provoked: ", as.character(states_merged$Provoked),
+                       "\n Uninjured: ", as.character(states_merged$Uninjured))
+
+leaflet() %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  setView(-108.483330,38.712046,zoom=3) %>%
+  addPolygons(data=states_merged,
+              fillColor=~pal2(states_merged@data[,c("Uninjured")]),
+              fillOpacity=0.7,
+              weight=0.2,
+              smoothFactor=0.2,
+              popup=~popup_attack) %>%
+  addLegend(pal=pal2,
+            values=states_merged@data[,c("Uninjured")],
+            position="bottomright",
+            title="Fatalities")
+```
+
+## Infrequent, but still not the best
+
+```{r,echo=F}
+ggplot(attack2010) + geom_bar(aes(x=Year,fill=as.factor(Laceration))) + xlab("") + ylab("Frequency") + scale_x_continuous(breaks=seq(2010,2019,1)) + labs(fill="Laceration")
+```
+
+- Lacerations are scary and can happen pretty frequently.
+
+## Media Analysis
+
+- In this presentation, I'll compare two groups of articles.
+- Two are about bad attacks in 2019 and two are about bad attacks in 2010.
+- They're short, so I'll analyze them in pairs.
+
+## Sentiment comparison: 2010 and 2019.
+
+```{r,echo=F,message=F}
+source("TextFunctions.R")
+
+p1 <- sentorder(textdf3) + theme(legend.position="none") + labs(title="2010",subtitle="From Hawaii News Now")
+p2 <- sentorder(textdf2) + theme(legend.position="none") + labs(title="2019",subtitle="From Hawaii News Now")
+grid.arrange(p1,p2,ncol=2)
+
+```
+
+## However, let's look closer.
+
+```{r,echo=F,message=F}
+  snrc <- get_sentiments("nrc")
+  sent <- inner_join(textdf2, snrc)
+  topsent <- sent %>% group_by(word,sentiment) %>% summarize(n=n()) %>% arrange(-n)
+  ggplot(data=topsent[1:20,],aes(x=word,y=n,fill=sentiment)) + geom_bar(stat="identity") + coord_flip() + 
+  ylab("Number of Occurrences") + xlab("") + theme(legend.position = "none") + theme_bw() + labs(title="Word frequency (and sentiment) in analyzed 2019 articles")
+
+```
+
+## Compare to Conservation Group.
+```{r,echo=F,message=F}
+  snrc <- get_sentiments("nrc")
+  sent <- inner_join(textdf, snrc)
+  topsent <- sent %>% group_by(word,sentiment) %>% summarize(n=n()) %>% arrange(-n)
+  ggplot(data=topsent[1:20,],aes(x=word,y=n,fill=sentiment)) + geom_bar(stat="identity") + coord_flip() + 
+  ylab("Number of Occurrences") + xlab("") + theme(legend.position = "none") + theme_bw() + labs(title="Word frequency (and sentiment) in 2019 articles with no injuries",subtitle="Articles from TrackingSharks.com")
+
+```
+
+## What does this mean?
+
+- Shark attacks aren't frequent, but a lot of the injuries are still bad.
+- When covering a shark attack, the focus is on the injury, which makes the shark seem scary.
+- The conservation article seems to be even more focused on the injury than the news.
+
+## What can be done next?
+
+- To improve a shark's image, covering them outside of shark attacks may be the key.
+- Analyzing more shark articles not focused on shark attacks can provide an interesting point of comparison.
+- Additionally, analyzing and comparing these factors to countries like Australia may provide a lot of insight into other nation-specific factors of these effects.
+
+# Thank you!
+
+
+
